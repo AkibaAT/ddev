@@ -5,7 +5,7 @@ defaults:
     shell: bash
 on:
   push:
-    branches: [ main, master ]
+    branches: [ feature/test-window-build ]
   release:
     types: [ created ]
   workflow_dispatch:
@@ -82,23 +82,29 @@ jobs:
           path: .gotmp/bin
           key: ${{ github.sha }}-${{ github.ref }}-build-most
 
-  # This Windows self-hosted runner has to be set up with gnu tar and zstd.exe, or
-  # this step will fail to properly create the cache.
-  # Make sure gnu tar is the tar used here. System PATH should have C:\program files\gnu\usr\bin near top
-  # Get zstd.exe from https://github.com/facebook/zstd/releases - I put it into C:\program files\gnu\usr\bin
-  # so it would be in PATH
-  # See https://github.com/actions/cache/issues/580
-  # Run the Windows action with debug enabled to be able to see which tar is in use, etc.
   sign-windows:
     name: Build and Sign Windows binaries
-    runs-on: [ self-hosted, windows-signer ]
+    runs-on: windows-latest
     env:
       DDEV_WINDOWS_SIGN: ${{ vars.DDEV_WINDOWS_SIGN }}
     steps:
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Setup WSL2
+        uses: vedantmgoyal9/setup-wsl2@v1.1.0
+        with:
+          distro: Ubuntu
+      - name: Set up Homebrew
+        shell: wsl-run {0}
+        run: |
+          NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      - name: Install Docker and deps
+        shell: wsl-run {0}
+        run: ./.github/workflows/linux-setup.sh
+      - name: Install build tools
+        shell: wsl-run {0}
+        run: ./.github/workflows/linux-build-setup.sh
       - name: Build and sign windows amd64/arm64 binaries and installers
         shell: bash
         run: |
