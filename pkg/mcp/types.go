@@ -18,11 +18,12 @@ type DDEVMCPServer struct {
 
 // ServerSettings contains configuration for the MCP server
 type ServerSettings struct {
-	Port          int
-	AllowWrites   bool
-	AutoApprove   []string // Commands that don't need approval
-	LogLevel      string
-	TransportType string // "stdio", "http", "websocket"
+	Port           int
+	AllowWrites    bool
+	AutoApprove    []string // Commands that don't need approval
+	LogLevel       string
+	TransportType  string // "stdio", "http", "websocket"
+	DefaultProject string // Pin to single project (empty = multi-project mode)
 }
 
 // Transport interface for different MCP transport methods

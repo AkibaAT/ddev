@@ -15,11 +15,12 @@ import (
 )
 
 var mcpSettings = mcp.ServerSettings{
-	Port:          8080,
-	AllowWrites:   false,
-	AutoApprove:   []string{},
-	LogLevel:      "info",
-	TransportType: "stdio",
+	Port:           8080,
+	AllowWrites:    false,
+	AutoApprove:    []string{},
+	LogLevel:       "info",
+	TransportType:  "stdio",
+	DefaultProject: "",
 }
 
 var testMode bool
@@ -85,6 +86,7 @@ ddev mcp start --test --transport=stdio`,
 		transportInfo := fmt.Sprintf("transport=%s", mcpSettings.TransportType)
 		if mcpSettings.TransportType == "http" {
 			transportInfo += fmt.Sprintf(" port=%d", mcpSettings.Port)
+			transportInfo += fmt.Sprintf(" url=http://localhost:%d", mcpSettings.Port)
 		}
 
 		permissions := "read-only"
@@ -93,7 +95,14 @@ ddev mcp start --test --transport=stdio`,
 		}
 
 		// For stdio transport, write messages to stderr to avoid corrupting MCP JSON-RPC on stdout
-		output.UserErr.Printf("DDEV MCP server starting (%s, %s)", transportInfo, permissions)
+		if mcpSettings.TransportType == "http" {
+			output.UserOut.Printf("🚀 DDEV HTTP MCP server started (%s, %s)", transportInfo, permissions)
+			output.UserOut.Printf("📡 JSON-RPC endpoint: http://localhost:%d", mcpSettings.Port)
+			output.UserOut.Printf("🔧 Available tools: ddev_list_projects, ddev_describe_project, ddev_database_query, ddev_composer_command")
+			output.UserOut.Printf("⚡ Send Ctrl+C to stop the server")
+		} else {
+			output.UserErr.Printf("DDEV MCP server starting (%s, %s)", transportInfo, permissions)
+		}
 
 		// Special case: if running stdio in test mode, check for EOF immediately
 		if testMode && mcpSettings.TransportType == "stdio" {
@@ -170,6 +179,7 @@ func init() {
 	MCPStartCmd.Flags().StringVar(&mcpSettings.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 	MCPStartCmd.Flags().StringSliceVar(&mcpSettings.AutoApprove, "auto-approve", []string{}, "Commands that don't require approval")
 	MCPStartCmd.Flags().BoolVar(&testMode, "test", false, "Enable test mode with timeout for stdio transport")
+	MCPStartCmd.Flags().StringVar(&mcpSettings.DefaultProject, "default-project", "", "Pin to single project (empty = multi-project mode)")
 
 	// Add subcommands to MCPCmd
 	MCPCmd.AddCommand(MCPStartCmd)

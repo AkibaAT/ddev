@@ -126,6 +126,8 @@ func (sm *BasicSecurityManager) getToolPermissionLevel(toolName string) Permissi
 		"ddev_exec_command",
 		"ddev_configure_project",
 		"ddev_update_config",
+		"ddev_database_query",
+		"ddev_composer_command",
 	}
 
 	safeOps := []string{
@@ -135,12 +137,22 @@ func (sm *BasicSecurityManager) getToolPermissionLevel(toolName string) Permissi
 		"ddev_restart_project",
 	}
 
+	readOnlyOps := []string{
+		"ddev_describe_project",
+		"ddev_logs",
+		"ddev_get_config",
+	}
+
 	if slices.Contains(destructiveOps, toolName) {
 		return DestructiveOperations
 	}
 
 	if slices.Contains(safeOps, toolName) {
 		return SafeOperations
+	}
+
+	if slices.Contains(readOnlyOps, toolName) {
+		return ReadOnly
 	}
 
 	// Default to read-only for unknown tools

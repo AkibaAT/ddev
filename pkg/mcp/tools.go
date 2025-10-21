@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -119,6 +120,46 @@ type UpdateConfigOutput struct {
 	Warnings    []string `json:"warnings,omitempty" jsonschema:"description:Configuration warnings"`
 }
 
+// DatabaseQueryInput represents the input parameters for the ddev_database_query tool
+type DatabaseQueryInput struct {
+	Name                 string `json:"name,omitempty" jsonschema:"description:Project name (uses active project if omitted)"`
+	AppRoot              string `json:"approot,omitempty" jsonschema:"description:Absolute path to project root (overrides name if set)"`
+	Query                string `json:"query" jsonschema:"description:SQL query to execute"`
+	Database             string `json:"database,omitempty" jsonschema:"description:Database name (optional, uses default database)"`
+	AllowWriteOperations bool   `json:"allow_write_operations,omitempty" jsonschema:"description:Allow write operations (default: false for read-only mode)"`
+}
+
+// DatabaseQueryOutput represents the structured output for database queries
+type DatabaseQueryOutput struct {
+	ProjectName          string `json:"project_name" jsonschema:"description:Name of the project"`
+	DatabaseType         string `json:"database_type" jsonschema:"description:Type of database (mysql, mariadb, postgres)"`
+	Query                string `json:"query" jsonschema:"description:Query that was executed"`
+	Database             string `json:"database,omitempty" jsonschema:"description:Database name used"`
+	AllowWriteOperations bool   `json:"allow_write_operations" jsonschema:"description:Whether write operations were allowed"`
+	Stdout               string `json:"stdout,omitempty" jsonschema:"description:Query output"`
+	Success              bool   `json:"success" jsonschema:"description:Whether the query was executed successfully"`
+	Message              string `json:"message,omitempty" jsonschema:"description:Additional information or error message"`
+	SecurityMode         string `json:"security_mode" jsonschema:"description:Security mode indicator"`
+}
+
+// ComposerCommandInput represents the input parameters for the ddev_composer_command tool
+type ComposerCommandInput struct {
+	Name       string `json:"name,omitempty" jsonschema:"description:Project name (uses active project if omitted)"`
+	AppRoot    string `json:"approot,omitempty" jsonschema:"description:Absolute path to project root (overrides name if set)"`
+	Command    string `json:"command" jsonschema:"description:Composer command to run"`
+	FormatJSON bool   `json:"format_json,omitempty" jsonschema:"description:Automatically add --format=json for supported commands"`
+}
+
+// ComposerCommandOutput represents the structured output for composer commands
+type ComposerCommandOutput struct {
+	ProjectName  string `json:"project_name" jsonschema:"description:Name of the project"`
+	Command      string `json:"command" jsonschema:"description:Command that was executed"`
+	Stdout       string `json:"stdout,omitempty" jsonschema:"description:Command output"`
+	Success      bool   `json:"success" jsonschema:"description:Whether the command was executed successfully"`
+	Message      string `json:"message,omitempty" jsonschema:"description:Additional information or error message"`
+	IsJSONOutput bool   `json:"is_json_output" jsonschema:"description:Whether output was parsed as JSON"`
+}
+
 // Global security manager reference for tool handlers with mutex protection
 var (
 	globalSecurityManager SecurityManager
@@ -192,6 +233,18 @@ func registerDDEVTools(server *mcp.Server, security SecurityManager) error {
 		Name:        "ddev_update_config",
 		Description: "Update DDEV project configuration with validation and backup",
 	}, handleUpdateConfig)
+
+	// Register database operation tools
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "ddev_database_query",
+		Description: "Execute SQL queries on DDEV project databases with advanced security validation",
+	}, handleDatabaseQuery)
+
+	// Register development tools
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "ddev_composer_command",
+		Description: "Run Composer commands in DDEV projects with automatic JSON formatting",
+	}, handleComposerCommand)
 
 	return nil
 }
@@ -354,7 +407,7 @@ func handleStartProject(ctx context.Context, _ *mcp.CallToolRequest, input Proje
 	}
 
 	// Check permissions before proceeding
-	if securityManager := getGlobalSecurityManager(); securityManager != nil {
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
 		if permErr := securityManager.CheckPermission(toolName, args); permErr != nil {
 			output := ProjectLifecycleOutput{
 				ProjectName: input.Name,
@@ -362,7 +415,7 @@ func handleStartProject(ctx context.Context, _ *mcp.CallToolRequest, input Proje
 				Success:     false,
 				Message:     fmt.Sprintf("Permission denied: %v", permErr),
 			}
-			securityManager.LogOperation(toolName, args, output, permErr)
+			getGlobalSecurityManager().LogOperation(toolName, args, output, permErr)
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
 		}
 	}
@@ -431,8 +484,8 @@ func handleStartProject(ctx context.Context, _ *mcp.CallToolRequest, input Proje
 	}
 
 	// Log successful operation
-	if securityManager := getGlobalSecurityManager(); securityManager != nil {
-		securityManager.LogOperation(toolName, args, output, nil)
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
+		getGlobalSecurityManager().LogOperation(toolName, args, output, nil)
 	}
 
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Started project %s successfully", app.GetName())}}}, output, nil
@@ -449,7 +502,7 @@ func handleStopProject(ctx context.Context, _ *mcp.CallToolRequest, input Projec
 	}
 
 	// Check permissions before proceeding
-	if securityManager := getGlobalSecurityManager(); securityManager != nil {
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
 		if permErr := securityManager.CheckPermission(toolName, args); permErr != nil {
 			output := ProjectLifecycleOutput{
 				ProjectName: input.Name,
@@ -457,7 +510,7 @@ func handleStopProject(ctx context.Context, _ *mcp.CallToolRequest, input Projec
 				Success:     false,
 				Message:     fmt.Sprintf("Permission denied: %v", permErr),
 			}
-			securityManager.LogOperation(toolName, args, output, permErr)
+			getGlobalSecurityManager().LogOperation(toolName, args, output, permErr)
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
 		}
 	}
@@ -526,8 +579,8 @@ func handleStopProject(ctx context.Context, _ *mcp.CallToolRequest, input Projec
 	}
 
 	// Log successful operation
-	if securityManager := getGlobalSecurityManager(); securityManager != nil {
-		securityManager.LogOperation(toolName, args, output, nil)
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
+		getGlobalSecurityManager().LogOperation(toolName, args, output, nil)
 	}
 
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Stopped project %s successfully", app.GetName())}}}, output, nil
@@ -544,7 +597,7 @@ func handleRestartProject(ctx context.Context, _ *mcp.CallToolRequest, input Pro
 	}
 
 	// Check permissions before proceeding
-	if securityManager := getGlobalSecurityManager(); securityManager != nil {
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
 		if permErr := securityManager.CheckPermission(toolName, args); permErr != nil {
 			output := ProjectLifecycleOutput{
 				ProjectName: input.Name,
@@ -552,7 +605,7 @@ func handleRestartProject(ctx context.Context, _ *mcp.CallToolRequest, input Pro
 				Success:     false,
 				Message:     fmt.Sprintf("Permission denied: %v", permErr),
 			}
-			securityManager.LogOperation(toolName, args, output, permErr)
+			getGlobalSecurityManager().LogOperation(toolName, args, output, permErr)
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
 		}
 	}
@@ -621,8 +674,8 @@ func handleRestartProject(ctx context.Context, _ *mcp.CallToolRequest, input Pro
 	}
 
 	// Log successful operation
-	if securityManager := getGlobalSecurityManager(); securityManager != nil {
-		securityManager.LogOperation(toolName, args, output, nil)
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
+		getGlobalSecurityManager().LogOperation(toolName, args, output, nil)
 	}
 
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Restarted project %s successfully", app.GetName())}}}, output, nil
@@ -641,7 +694,7 @@ func handleExecCommand(ctx context.Context, _ *mcp.CallToolRequest, input ExecCo
 	}
 
 	// Check permissions before proceeding
-	if securityManager := getGlobalSecurityManager(); securityManager != nil {
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
 		if permErr := securityManager.CheckPermission(toolName, args); permErr != nil {
 			output := ExecCommandOutput{
 				ProjectName: input.Name,
@@ -650,7 +703,7 @@ func handleExecCommand(ctx context.Context, _ *mcp.CallToolRequest, input ExecCo
 				Success:     false,
 				Message:     fmt.Sprintf("Permission denied: %v", permErr),
 			}
-			securityManager.LogOperation(toolName, args, output, permErr)
+			getGlobalSecurityManager().LogOperation(toolName, args, output, permErr)
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
 		}
 
@@ -665,7 +718,7 @@ func handleExecCommand(ctx context.Context, _ *mcp.CallToolRequest, input ExecCo
 					Success:     false,
 					Message:     fmt.Sprintf("Approval required: %v", approvalErr),
 				}
-				securityManager.LogOperation(toolName, args, output, approvalErr)
+				getGlobalSecurityManager().LogOperation(toolName, args, output, approvalErr)
 				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
 			}
 		}
@@ -748,8 +801,8 @@ func handleExecCommand(ctx context.Context, _ *mcp.CallToolRequest, input ExecCo
 	output.Message = "Command executed successfully"
 
 	// Log successful operation
-	if securityManager := getGlobalSecurityManager(); securityManager != nil {
-		securityManager.LogOperation(toolName, args, output, nil)
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
+		getGlobalSecurityManager().LogOperation(toolName, args, output, nil)
 	}
 
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Executed '%s' in %s service of project %s", input.Command, service, app.GetName())}}}, output, nil
@@ -914,14 +967,14 @@ func handleUpdateConfig(ctx context.Context, _ *mcp.CallToolRequest, input Updat
 	}
 
 	// Check permissions before proceeding
-	if securityManager := getGlobalSecurityManager(); securityManager != nil {
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
 		if permErr := securityManager.CheckPermission(toolName, args); permErr != nil {
 			output := UpdateConfigOutput{
 				ProjectName: input.Name,
 				Success:     false,
 				Message:     fmt.Sprintf("Permission denied: %v", permErr),
 			}
-			securityManager.LogOperation(toolName, args, output, permErr)
+			getGlobalSecurityManager().LogOperation(toolName, args, output, permErr)
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
 		}
 
@@ -934,7 +987,7 @@ func handleUpdateConfig(ctx context.Context, _ *mcp.CallToolRequest, input Updat
 					Success:     false,
 					Message:     fmt.Sprintf("Approval required: %v", approvalErr),
 				}
-				securityManager.LogOperation(toolName, args, output, approvalErr)
+				getGlobalSecurityManager().LogOperation(toolName, args, output, approvalErr)
 				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
 			}
 		}
@@ -1045,11 +1098,376 @@ func handleUpdateConfig(ctx context.Context, _ *mcp.CallToolRequest, input Updat
 	output.Message = "Configuration updated successfully"
 
 	// Log successful operation
-	if securityManager := getGlobalSecurityManager(); securityManager != nil {
-		securityManager.LogOperation(toolName, args, output, nil)
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
+		getGlobalSecurityManager().LogOperation(toolName, args, output, nil)
 	}
 
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Updated configuration for project %s", app.GetName())}}}, output, nil
+}
+
+// handleDatabaseQuery handles the ddev_database_query MCP tool
+func handleDatabaseQuery(ctx context.Context, _ *mcp.CallToolRequest, input DatabaseQueryInput) (*mcp.CallToolResult, DatabaseQueryOutput, error) {
+	// Security check - this is a potentially destructive operation
+	toolName := "ddev_database_query"
+	args := map[string]any{
+		"name":                   input.Name,
+		"approot":                input.AppRoot,
+		"query":                  input.Query,
+		"database":               input.Database,
+		"allow_write_operations": input.AllowWriteOperations,
+	}
+
+	// Check permissions before proceeding
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
+		if permErr := securityManager.CheckPermission(toolName, args); permErr != nil {
+			output := DatabaseQueryOutput{
+				ProjectName: input.Name,
+				Query:       input.Query,
+				Success:     false,
+				Message:     fmt.Sprintf("Permission denied: %v", permErr),
+			}
+			getGlobalSecurityManager().LogOperation(toolName, args, output, permErr)
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+		}
+
+		// Check if approval is required for this operation
+		if securityManager.RequiresApproval(toolName, args) {
+			description := fmt.Sprintf("Execute database query: %s", input.Query)
+			if approvalErr := securityManager.RequestApproval(toolName, args, description); approvalErr != nil {
+				output := DatabaseQueryOutput{
+					ProjectName: input.Name,
+					Query:       input.Query,
+					Success:     false,
+					Message:     fmt.Sprintf("Approval required: %v", approvalErr),
+				}
+				getGlobalSecurityManager().LogOperation(toolName, args, output, approvalErr)
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+			}
+		}
+	}
+
+	// Validate query security
+	allowed, reason := ValidateQuerySecurity(input.Query, input.AllowWriteOperations)
+	if !allowed {
+		output := DatabaseQueryOutput{
+			ProjectName: input.Name,
+			Query:       input.Query,
+			Success:     false,
+			Message:     fmt.Sprintf("Query not allowed: %s", reason),
+		}
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+	}
+
+	// Resolve project name based on DefaultProject settings
+	resolvedProject, err := ResolveProjectName(input.Name, getGlobalSecurityManager.(*BasicSecurityManager).settings)
+	if err != nil {
+		output := DatabaseQueryOutput{
+			ProjectName: input.Name,
+			Query:       input.Query,
+			Success:     false,
+			Message:     fmt.Sprintf("Project resolution failed: %v", err),
+		}
+		getGlobalSecurityManager().LogOperation(toolName, args, output, err)
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+	}
+
+	// Validate project access based on pinning mode
+	if err := ValidateProjectAccess(resolvedProject, getGlobalSecurityManager.(*BasicSecurityManager).settings, toolName); err != nil {
+		output := DatabaseQueryOutput{
+			ProjectName: resolvedProject,
+			Query:       input.Query,
+			Success:     false,
+			Message:     fmt.Sprintf("Access denied: %v", err),
+		}
+		getGlobalSecurityManager().LogOperation(toolName, args, output, err)
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+	}
+
+	// Use resolved project for all operations
+	input.Name = resolvedProject
+
+	var app *ddevapp.DdevApp
+	var loadErr error
+
+	// Select project by approot > name > current directory
+	switch {
+	case input.AppRoot != "":
+		app, loadErr = ddevapp.NewApp(input.AppRoot, true)
+		if loadErr != nil {
+			output := DatabaseQueryOutput{
+				ProjectName: input.Name,
+				Query:       input.Query,
+				Success:     false,
+				Message:     fmt.Sprintf("Failed to load app at approot %s: %v", input.AppRoot, loadErr),
+			}
+			if getGlobalSecurityManager() != nil {
+				getGlobalSecurityManager().LogOperation(toolName, args, output, loadErr)
+			}
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+		}
+	case input.Name != "":
+		app, loadErr = ddevapp.GetActiveApp(input.Name)
+		if loadErr != nil {
+			output := DatabaseQueryOutput{
+				ProjectName: input.Name,
+				Query:       input.Query,
+				Success:     false,
+				Message:     fmt.Sprintf("Failed to find active app %s: %v", input.Name, loadErr),
+			}
+			if getGlobalSecurityManager() != nil {
+				getGlobalSecurityManager().LogOperation(toolName, args, output, loadErr)
+			}
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+		}
+	default:
+		app, loadErr = ddevapp.GetActiveApp("")
+		if loadErr != nil {
+			output := DatabaseQueryOutput{
+				ProjectName: "current directory",
+				Query:       input.Query,
+				Success:     false,
+				Message:     fmt.Sprintf("Failed to find active app from current directory: %v", loadErr),
+			}
+			if getGlobalSecurityManager() != nil {
+				getGlobalSecurityManager().LogOperation(toolName, args, output, loadErr)
+			}
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+		}
+	}
+
+	// Get project description to determine database type
+	desc, err := app.Describe(false)
+	if err != nil {
+		output := DatabaseQueryOutput{
+			ProjectName: app.GetName(),
+			Query:       input.Query,
+			Success:     false,
+			Message:     fmt.Sprintf("Failed to describe project %s: %v", app.GetName(), err),
+		}
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+	}
+
+	// Determine database type and build command
+	databaseType := GetDatabaseType(desc)
+	databaseCommand := BuildDatabaseCommand(databaseType, input.Database, input.Query)
+
+	// Execute database command using DDEV's Exec functionality
+	opts := &ddevapp.ExecOpts{
+		Service: "db",
+		Cmd:     databaseCommand,
+	}
+
+	stdout, stderr, err := app.Exec(opts)
+	success := err == nil
+
+	// Determine security mode indicator
+	securityMode := "🔒 Read-Only Mode"
+	if input.AllowWriteOperations {
+		securityMode = "🔓 Write Mode"
+	}
+
+	output := DatabaseQueryOutput{
+		ProjectName:          app.GetName(),
+		DatabaseType:         string(databaseType),
+		Query:                input.Query,
+		Database:             input.Database,
+		AllowWriteOperations: input.AllowWriteOperations,
+		Stdout:               stdout,
+		Success:              success,
+		SecurityMode:         securityMode,
+	}
+
+	if err != nil {
+		output.Message = fmt.Sprintf("Database query failed: %v", err)
+		if stderr != "" {
+			output.Message += fmt.Sprintf("\nStderr: %s", stderr)
+		}
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+	}
+
+	output.Message = "Database query executed successfully"
+
+	// Log successful operation
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
+		getGlobalSecurityManager().LogOperation(toolName, args, output, nil)
+	}
+
+	// Build human-readable response
+	responseText := fmt.Sprintf("Executed query on %s database of project %s [%s]\n\n%s",
+		databaseType, app.GetName(), securityMode, stdout)
+
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: responseText}}}, output, nil
+}
+
+// handleComposerCommand handles the ddev_composer_command MCP tool
+func handleComposerCommand(ctx context.Context, _ *mcp.CallToolRequest, input ComposerCommandInput) (*mcp.CallToolResult, ComposerCommandOutput, error) {
+	// Security check - this is a potentially destructive operation
+	toolName := "ddev_composer_command"
+	args := map[string]any{
+		"name":        input.Name,
+		"approot":     input.AppRoot,
+		"command":     input.Command,
+		"format_json": input.FormatJSON,
+	}
+
+	// Check permissions before proceeding
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
+		if permErr := securityManager.CheckPermission(toolName, args); permErr != nil {
+			output := ComposerCommandOutput{
+				ProjectName: input.Name,
+				Command:     input.Command,
+				Success:     false,
+				Message:     fmt.Sprintf("Permission denied: %v", permErr),
+			}
+			getGlobalSecurityManager().LogOperation(toolName, args, output, permErr)
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+		}
+
+		// Check if approval is required for this operation
+		if securityManager.RequiresApproval(toolName, args) {
+			description := fmt.Sprintf("Execute Composer command: %s", input.Command)
+			if approvalErr := securityManager.RequestApproval(toolName, args, description); approvalErr != nil {
+				output := ComposerCommandOutput{
+					ProjectName: input.Name,
+					Command:     input.Command,
+					Success:     false,
+					Message:     fmt.Sprintf("Approval required: %v", approvalErr),
+				}
+				getGlobalSecurityManager().LogOperation(toolName, args, output, approvalErr)
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+			}
+		}
+	}
+
+	var app *ddevapp.DdevApp
+	var err error
+
+	// Select project by approot > name > current directory
+	switch {
+	case input.AppRoot != "":
+		app, err = ddevapp.NewApp(input.AppRoot, true)
+		if err != nil {
+			output := ComposerCommandOutput{
+				ProjectName: input.AppRoot,
+				Command:     input.Command,
+				Success:     false,
+				Message:     fmt.Sprintf("Failed to load app at approot %s: %v", input.AppRoot, err),
+			}
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+		}
+	case input.Name != "":
+		app, err = ddevapp.GetActiveApp(input.Name)
+		if err != nil {
+			output := ComposerCommandOutput{
+				ProjectName: input.Name,
+				Command:     input.Command,
+				Success:     false,
+				Message:     fmt.Sprintf("Failed to find active app %s: %v", input.Name, err),
+			}
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+		}
+	default:
+		app, err = ddevapp.GetActiveApp("")
+		if err != nil {
+			output := ComposerCommandOutput{
+				ProjectName: "current directory",
+				Command:     input.Command,
+				Success:     false,
+				Message:     fmt.Sprintf("Failed to find active app from current directory: %v", err),
+			}
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+		}
+	}
+
+	// Prepare Composer command with JSON formatting for supported commands
+	composerCommand := input.Command
+	if input.FormatJSON {
+		// Commands that support JSON output
+		jsonSupportedCommands := []string{
+			"show", "info", "list", "outdated", "depends",
+			"why", "why-not", "status", "licenses",
+		}
+
+		commandParts := strings.Fields(composerCommand)
+		if len(commandParts) > 0 {
+			commandName := commandParts[0]
+			for _, supported := range jsonSupportedCommands {
+				if commandName == supported {
+					// Check if --format is already specified
+					hasFormatFlag := false
+					for _, part := range commandParts {
+						if strings.HasPrefix(part, "--format=") {
+							hasFormatFlag = true
+							break
+						}
+					}
+					if !hasFormatFlag {
+						composerCommand = fmt.Sprintf("%s --format=json", composerCommand)
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Execute Composer command using DDEV's Exec functionality
+	opts := &ddevapp.ExecOpts{
+		Service: "web",
+		Dir:     "", // Use default directory
+		Cmd:     fmt.Sprintf("composer %s", composerCommand),
+	}
+
+	stdout, stderr, err := app.Exec(opts)
+	success := err == nil
+
+	output := ComposerCommandOutput{
+		ProjectName:  app.GetName(),
+		Command:      input.Command,
+		Stdout:       stdout,
+		Success:      success,
+		IsJSONOutput: input.FormatJSON,
+	}
+
+	if err != nil {
+		output.Message = fmt.Sprintf("Composer command failed: %v", err)
+		if stderr != "" {
+			output.Message += fmt.Sprintf("\nStderr: %s", stderr)
+		}
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: output.Message}}}, output, nil
+	}
+
+	// Try to parse as JSON if format was requested
+	if input.FormatJSON {
+		var jsonData any
+		if jsonErr := json.Unmarshal([]byte(stdout), &jsonData); jsonErr == nil {
+			// Successfully parsed as JSON
+			prettyJSON, _ := json.MarshalIndent(jsonData, "", "  ")
+			output.Stdout = string(prettyJSON)
+			output.Message = "Composer command executed successfully (JSON output)"
+		} else {
+			// Not valid JSON, keep as raw output
+			output.IsJSONOutput = false
+			output.Message = "Composer command executed successfully (raw output)"
+		}
+	} else {
+		output.Message = "Composer command executed successfully"
+	}
+
+	// Log successful operation
+	if securityManager := getGlobalSecurityManager(); getGlobalSecurityManager() != nil {
+		getGlobalSecurityManager().LogOperation(toolName, args, output, nil)
+	}
+
+	// Build human-readable response
+	responsePrefix := "Composer command executed successfully"
+	if input.FormatJSON && output.IsJSONOutput {
+		responsePrefix = "Composer command executed successfully (JSON output)"
+	}
+
+	responseText := fmt.Sprintf("%s in project %s:\n\n%s",
+		responsePrefix, app.GetName(), output.Stdout)
+
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: responseText}}}, output, nil
 }
 
 // Helper functions for tool implementations
@@ -1106,12 +1524,12 @@ func checkPermissionAndLog(toolName string, args map[string]any, result any, err
 
 	// Check permission before operation
 	if permErr := securityManager.CheckPermission(toolName, args); permErr != nil {
-		securityManager.LogOperation(toolName, args, nil, permErr)
+		getGlobalSecurityManager().LogOperation(toolName, args, nil, permErr)
 		return permErr
 	}
 
 	// Log operation after completion
-	securityManager.LogOperation(toolName, args, result, err)
+	getGlobalSecurityManager().LogOperation(toolName, args, result, err)
 	return nil
 }
 

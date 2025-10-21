@@ -179,6 +179,10 @@ func TestSecurityManagerToolPermissionLevels(t *testing.T) {
 		{"ddev_restart_project", SafeOperations},
 		{"ddev_logs", ReadOnly},
 		{"ddev_exec_command", DestructiveOperations},
+		{"ddev_database_query", DestructiveOperations},
+		{"ddev_composer_command", DestructiveOperations},
+		{"ddev_get_config", ReadOnly},
+		{"ddev_update_config", DestructiveOperations},
 		{"unknown_tool", ReadOnly},
 	}
 
