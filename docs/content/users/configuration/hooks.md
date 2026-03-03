@@ -149,6 +149,47 @@ hooks:
       exec_raw: [install, --no-dev]
 ```
 
+## Global Hooks
+
+You can define hooks in `~/.ddev/global_config.yaml` that run for **all** projects. This is useful when you have standard tasks that should apply everywhere, like adding host entries, setting up certificates, or running cache rebuilds after database imports.
+
+```yaml
+hooks:
+  post-start:
+    - exec-host: "echo project started"
+    - exec: "echo Hello from inside container"
+  post-import-db:
+    - exec: "drush cache:rebuild"
+```
+
+### Execution Order
+
+Global hooks run **before** project-specific hooks for each hook event. For example, during `post-start`:
+
+1. All global `post-start` hooks execute first
+2. Then all project `post-start` hooks execute
+
+### Service Not Found Behavior
+
+When a global hook references a service that doesn't exist in a particular project (e.g., `service: solr`), the task is skipped with a notice instead of failing. This applies even when `fail_on_hook_fail` is set to `true`. This allows you to define global hooks that target optional services without breaking projects that don't use those services.
+
+```yaml
+# In ~/.ddev/global_config.yaml
+hooks:
+  post-start:
+    # This will be skipped (with a notice) for projects without a Solr service
+    - exec: "echo Solr is running"
+      service: solr
+    # This will always run (defaults to web container)
+    - exec: "echo Hello from web"
+```
+
+### Notes
+
+* Global hooks have the same restrictions as project hooks: only `exec-host` tasks can run during `pre-start` and `post-stop` (containers aren't running).
+* The `--skip-hooks` flag skips both global and project hooks.
+* Global hooks are never written back to project `config.yaml` files.
+
 ## WordPress Example
 
 ```yaml

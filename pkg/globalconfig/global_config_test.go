@@ -294,3 +294,60 @@ func TestCheckForMultipleGlobalDdevDirs(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+// TestValidateGlobalHooks tests validation of hooks defined in global config
+func TestValidateGlobalHooks(t *testing.T) {
+	origHooks := globalconfig.DdevGlobalConfig.Hooks
+	defer func() {
+		globalconfig.DdevGlobalConfig.Hooks = origHooks
+	}()
+
+	t.Run("valid hooks accepted", func(t *testing.T) {
+		globalconfig.DdevGlobalConfig.Hooks = map[string][]nodeps.YAMLTask{
+			"post-start": {
+				{"exec": "echo hello"},
+				{"exec-host": "echo host"},
+			},
+			"post-import-db": {
+				{"composer": "install"},
+			},
+		}
+		err := globalconfig.ValidateGlobalConfig()
+		require.NoError(t, err)
+	})
+
+	t.Run("invalid hook name rejected", func(t *testing.T) {
+		globalconfig.DdevGlobalConfig.Hooks = map[string][]nodeps.YAMLTask{
+			"invalid-hook": {
+				{"exec": "echo hello"},
+			},
+		}
+		err := globalconfig.ValidateGlobalConfig()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid hook invalid-hook defined in global config")
+	})
+
+	t.Run("invalid task type rejected", func(t *testing.T) {
+		globalconfig.DdevGlobalConfig.Hooks = map[string][]nodeps.YAMLTask{
+			"post-start": {
+				{"invalid-task": "echo hello"},
+			},
+		}
+		err := globalconfig.ValidateGlobalConfig()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid task")
+		require.Contains(t, err.Error(), "defined for hook post-start in global config")
+	})
+
+	t.Run("nil hooks accepted", func(t *testing.T) {
+		globalconfig.DdevGlobalConfig.Hooks = nil
+		err := globalconfig.ValidateGlobalConfig()
+		require.NoError(t, err)
+	})
+
+	t.Run("empty hooks accepted", func(t *testing.T) {
+		globalconfig.DdevGlobalConfig.Hooks = map[string][]nodeps.YAMLTask{}
+		err := globalconfig.ValidateGlobalConfig()
+		require.NoError(t, err)
+	})
+}

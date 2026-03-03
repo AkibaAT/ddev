@@ -106,6 +106,7 @@ type DdevApp struct {
 	FailOnHookFail            bool                  `yaml:"fail_on_hook_fail,omitempty"`
 	BindAllInterfaces         bool                  `yaml:"bind_all_interfaces,omitempty"`
 	FailOnHookFailGlobal      bool                  `yaml:"-"`
+	HooksGlobal               map[string][]YAMLTask `yaml:"-"`
 	ConfigPath                string                `yaml:"-"`
 	DataDir                   string                `yaml:"-"`
 	SiteSettingsPath          string                `yaml:"-"`
@@ -1388,11 +1389,31 @@ func (app *DdevApp) ProcessHooks(hookName string) error {
 		output.UserOut.Debugf("Skipping the execution of %s hook...", hookName)
 		return nil
 	}
-	if cmds := app.Hooks[hookName]; len(cmds) > 0 {
-		output.UserOut.Debugf("Executing %s hook...", hookName)
+
+	// Run global hooks first
+	if globalTasks := app.HooksGlobal[hookName]; len(globalTasks) > 0 {
+		output.UserOut.Debugf("Executing global %s hook...", hookName)
+		if err := app.processHookTasks(hookName, globalTasks, true); err != nil {
+			return err
+		}
 	}
 
-	for _, c := range app.Hooks[hookName] {
+	// Then run project hooks
+	if projectTasks := app.Hooks[hookName]; len(projectTasks) > 0 {
+		output.UserOut.Debugf("Executing %s hook...", hookName)
+		if err := app.processHookTasks(hookName, projectTasks, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// processHookTasks runs the given hook tasks. When isGlobal is true, tasks that
+// fail because a referenced service does not exist are skipped with a notice
+// instead of failing, even when fail_on_hook_fail is set.
+func (app *DdevApp) processHookTasks(hookName string, tasks []YAMLTask, isGlobal bool) error {
+	for _, c := range tasks {
 		a := NewTask(app, c)
 		if a == nil {
 			return fmt.Errorf("unable to create task from %v", c)
@@ -1406,11 +1427,21 @@ func (app *DdevApp) ProcessHooks(hookName string) error {
 			}
 		}
 
-		output.UserOut.Debugf("=== Running task: %s, output below", a.GetDescription())
+		taskSource := ""
+		if isGlobal {
+			taskSource = "global "
+		}
+		output.UserOut.Debugf("=== Running %stask: %s, output below", taskSource, a.GetDescription())
 
 		err := a.Execute()
 
 		if err != nil {
+			// When a global hook references a service that doesn't exist in
+			// this project, skip with a notice instead of failing.
+			if isGlobal && strings.Contains(err.Error(), "does not exist") {
+				output.UserOut.Warnf("Skipping global hook task (service not found in project %s): %v", app.Name, err)
+				continue
+			}
 			if app.FailOnHookFail || app.FailOnHookFailGlobal {
 				output.UserOut.Errorf("Task failed: %v: %v", a.GetDescription(), err)
 				return fmt.Errorf("task failed: %v", err)
@@ -1419,7 +1450,6 @@ func (app *DdevApp) ProcessHooks(hookName string) error {
 			output.UserOut.Warn("A task failure does not mean that DDEV failed, but your hook configuration has a command that failed.")
 		}
 	}
-
 	return nil
 }
 

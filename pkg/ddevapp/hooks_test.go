@@ -3,9 +3,11 @@ package ddevapp_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ddev/ddev/pkg/ddevapp"
+	"github.com/ddev/ddev/pkg/globalconfig"
 	"github.com/ddev/ddev/pkg/nodeps"
 	"github.com/ddev/ddev/pkg/testcommon"
 	"github.com/ddev/ddev/pkg/util"
@@ -190,5 +192,148 @@ func TestProcessHooks(t *testing.T) {
 			require.NoError(t, err)
 			require.FileExists(t, filepath.Join(app.AppRoot, "post-share-hook-ran.txt"))
 		})
+	})
+
+	// Save and restore global config hooks
+	origGlobalHooks := globalconfig.DdevGlobalConfig.Hooks
+	t.Cleanup(func() {
+		globalconfig.DdevGlobalConfig.Hooks = origGlobalHooks
+	})
+
+	t.Run("global hooks run before project hooks", func(t *testing.T) {
+		markerFile := filepath.Join(app.AppRoot, "hook-order.txt")
+		defer os.Remove(markerFile)
+
+		app.HooksGlobal = map[string][]ddevapp.YAMLTask{
+			"hook-test": {
+				{"exec-host": "echo global >> " + markerFile},
+			},
+		}
+		app.Hooks = map[string][]ddevapp.YAMLTask{
+			"hook-test": {
+				{"exec-host": "echo project >> " + markerFile},
+			},
+		}
+
+		err = app.ProcessHooks("hook-test")
+		require.NoError(t, err)
+
+		content, err := os.ReadFile(markerFile)
+		require.NoError(t, err)
+		s := string(content)
+		require.Contains(t, s, "global")
+		require.Contains(t, s, "project")
+		// "global" should appear before "project"
+		require.Less(t, strings.Index(s, "global"), strings.Index(s, "project"))
+	})
+
+	t.Run("global hook with nonexistent service prints notice and does not fail", func(t *testing.T) {
+		app.HooksGlobal = map[string][]ddevapp.YAMLTask{
+			"hook-test": {
+				{"exec": "echo should be skipped", "service": "nonexistent-service"},
+			},
+		}
+		app.Hooks = nil
+
+		err = app.ProcessHooks("hook-test")
+		require.NoError(t, err)
+	})
+
+	t.Run("global hook with nonexistent service does not fail even with FailOnHookFail", func(t *testing.T) {
+		app.FailOnHookFail = true
+		defer func() { app.FailOnHookFail = false }()
+
+		app.HooksGlobal = map[string][]ddevapp.YAMLTask{
+			"hook-test": {
+				{"exec": "echo should be skipped", "service": "nonexistent-service"},
+			},
+		}
+		app.Hooks = nil
+
+		err = app.ProcessHooks("hook-test")
+		require.NoError(t, err)
+	})
+
+	t.Run("global hooks respect pre-start restriction", func(t *testing.T) {
+		app.HooksGlobal = map[string][]ddevapp.YAMLTask{
+			"pre-start": {
+				{"exec": "echo should fail"},
+			},
+		}
+		app.Hooks = nil
+
+		err = app.ProcessHooks("pre-start")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "pre-start hooks cannot contain exec")
+	})
+
+	t.Run("SkipHooks skips both global and project hooks", func(t *testing.T) {
+		ddevapp.SkipHooks = true
+		defer func() { ddevapp.SkipHooks = false }()
+
+		markerFile := filepath.Join(app.AppRoot, "should-not-exist-global.txt")
+		defer os.Remove(markerFile)
+
+		app.HooksGlobal = map[string][]ddevapp.YAMLTask{
+			"hook-test": {
+				{"exec-host": "touch " + markerFile},
+			},
+		}
+		app.Hooks = map[string][]ddevapp.YAMLTask{
+			"hook-test": {
+				{"exec-host": "touch " + markerFile},
+			},
+		}
+
+		err = app.ProcessHooks("hook-test")
+		require.NoError(t, err)
+		require.NoFileExists(t, markerFile)
+	})
+
+	t.Run("FailOnHookFail applies to global hooks", func(t *testing.T) {
+		app.FailOnHookFail = true
+		defer func() { app.FailOnHookFail = false }()
+
+		app.HooksGlobal = map[string][]ddevapp.YAMLTask{
+			"hook-test": {
+				{"exec-host": "false"},
+			},
+		}
+		app.Hooks = nil
+
+		err = app.ProcessHooks("hook-test")
+		require.Error(t, err)
+	})
+
+	t.Run("global hooks alone work without project hooks", func(t *testing.T) {
+		markerFile := filepath.Join(app.AppRoot, "global-only.txt")
+		defer os.Remove(markerFile)
+
+		app.HooksGlobal = map[string][]ddevapp.YAMLTask{
+			"hook-test": {
+				{"exec-host": "touch " + markerFile},
+			},
+		}
+		app.Hooks = nil
+
+		err = app.ProcessHooks("hook-test")
+		require.NoError(t, err)
+		require.FileExists(t, markerFile)
+	})
+
+	t.Run("global hooks loaded from global config", func(t *testing.T) {
+		globalconfig.DdevGlobalConfig.Hooks = map[string][]nodeps.YAMLTask{
+			"hook-test": {
+				{"exec-host": "echo loaded-from-global"},
+			},
+		}
+
+		newApp, err := ddevapp.NewApp(site.Dir, true)
+		require.NoError(t, err)
+		require.NotNil(t, newApp.HooksGlobal)
+		require.Len(t, newApp.HooksGlobal["hook-test"], 1)
+
+		// Restore
+		globalconfig.DdevGlobalConfig.Hooks = origGlobalHooks
 	})
 }

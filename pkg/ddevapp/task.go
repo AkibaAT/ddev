@@ -12,7 +12,7 @@ import (
 )
 
 // YAMLTask defines tasks like Exec to be run in hooks
-type YAMLTask map[string]interface{}
+type YAMLTask = nodeps.YAMLTask
 
 // Task is the interface defining methods we'll use in various tasks
 type Task interface {

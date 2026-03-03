@@ -39,37 +39,38 @@ type ProjectInfo struct {
 
 // GlobalConfig is the struct defining ddev's global config
 type GlobalConfig struct {
-	DeveloperMode                    bool                        `yaml:"developer_mode,omitempty"`
-	FailOnHookFailGlobal             bool                        `yaml:"fail_on_hook_fail"`
-	InstrumentationOptIn             bool                        `yaml:"instrumentation_opt_in"`
-	InstrumentationQueueSize         int                         `yaml:"instrumentation_queue_size,omitempty"`
-	InstrumentationReportingInterval time.Duration               `yaml:"instrumentation_reporting_interval,omitempty"`
-	InstrumentationUser              string                      `yaml:"instrumentation_user,omitempty"`
-	InternetDetectionTimeout         int64                       `yaml:"internet_detection_timeout_ms"`
-	LastStartedVersion               string                      `yaml:"last_started_version"`
-	LetsEncryptEmail                 string                      `yaml:"letsencrypt_email"`
-	Messages                         MessagesConfig              `yaml:"messages,omitempty"`
-	MkcertCARoot                     string                      `yaml:"mkcert_caroot"`
-	NoBindMounts                     bool                        `yaml:"no_bind_mounts"`
-	NoTUI                            bool                        `yaml:"no_tui,omitempty"`
-	OmitContainersGlobal             []string                    `yaml:"omit_containers,flow"`
-	OmitProjectNameByDefault         bool                        `yaml:"omit_project_name_by_default,omitempty"`
-	PerformanceMode                  configTypes.PerformanceMode `yaml:"performance_mode"`
-	ProjectTldGlobal                 string                      `yaml:"project_tld"`
-	RemoteConfig                     RemoteConfig                `yaml:"remote_config,omitempty"`
-	RequiredDockerComposeVersion     string                      `yaml:"required_docker_compose_version,omitempty"`
-	Router                           string                      `yaml:"router,omitempty"`
-	RouterBindAllInterfaces          bool                        `yaml:"router_bind_all_interfaces"`
-	RouterHTTPPort                   string                      `yaml:"router_http_port"`
-	RouterHTTPSPort                  string                      `yaml:"router_https_port"`
-	RouterMailpitHTTPPort            string                      `yaml:"mailpit_http_port,omitempty"`
-	RouterMailpitHTTPSPort           string                      `yaml:"mailpit_https_port,omitempty"`
-	RouterXHGuiHTTPPort              string                      `yaml:"xhgui_http_port,omitempty"`
-	RouterXHGuiHTTPSPort             string                      `yaml:"xhgui_https_port,omitempty"`
-	ShareDefaultProvider             string                      `yaml:"share_default_provider,omitempty"`
-	SimpleFormatting                 bool                        `yaml:"simple_formatting"`
-	TableStyle                       string                      `yaml:"table_style"`
-	TraefikMonitorPort               string                      `yaml:"traefik_monitor_port,omitempty"`
+	DeveloperMode                    bool                         `yaml:"developer_mode,omitempty"`
+	FailOnHookFailGlobal             bool                         `yaml:"fail_on_hook_fail"`
+	Hooks                            map[string][]nodeps.YAMLTask `yaml:"hooks,omitempty"`
+	InstrumentationOptIn             bool                         `yaml:"instrumentation_opt_in"`
+	InstrumentationQueueSize         int                          `yaml:"instrumentation_queue_size,omitempty"`
+	InstrumentationReportingInterval time.Duration                `yaml:"instrumentation_reporting_interval,omitempty"`
+	InstrumentationUser              string                       `yaml:"instrumentation_user,omitempty"`
+	InternetDetectionTimeout         int64                        `yaml:"internet_detection_timeout_ms"`
+	LastStartedVersion               string                       `yaml:"last_started_version"`
+	LetsEncryptEmail                 string                       `yaml:"letsencrypt_email"`
+	Messages                         MessagesConfig               `yaml:"messages,omitempty"`
+	MkcertCARoot                     string                       `yaml:"mkcert_caroot"`
+	NoBindMounts                     bool                         `yaml:"no_bind_mounts"`
+	NoTUI                            bool                         `yaml:"no_tui,omitempty"`
+	OmitContainersGlobal             []string                     `yaml:"omit_containers,flow"`
+	OmitProjectNameByDefault         bool                         `yaml:"omit_project_name_by_default,omitempty"`
+	PerformanceMode                  configTypes.PerformanceMode  `yaml:"performance_mode"`
+	ProjectTldGlobal                 string                       `yaml:"project_tld"`
+	RemoteConfig                     RemoteConfig                 `yaml:"remote_config,omitempty"`
+	RequiredDockerComposeVersion     string                       `yaml:"required_docker_compose_version,omitempty"`
+	Router                           string                       `yaml:"router,omitempty"`
+	RouterBindAllInterfaces          bool                         `yaml:"router_bind_all_interfaces"`
+	RouterHTTPPort                   string                       `yaml:"router_http_port"`
+	RouterHTTPSPort                  string                       `yaml:"router_https_port"`
+	RouterMailpitHTTPPort            string                       `yaml:"mailpit_http_port,omitempty"`
+	RouterMailpitHTTPSPort           string                       `yaml:"mailpit_https_port,omitempty"`
+	RouterXHGuiHTTPPort              string                       `yaml:"xhgui_http_port,omitempty"`
+	RouterXHGuiHTTPSPort             string                       `yaml:"xhgui_https_port,omitempty"`
+	ShareDefaultProvider             string                       `yaml:"share_default_provider,omitempty"`
+	SimpleFormatting                 bool                         `yaml:"simple_formatting"`
+	TableStyle                       string                       `yaml:"table_style"`
+	TraefikMonitorPort               string                       `yaml:"traefik_monitor_port,omitempty"`
 	// This may still be used in Docker Compose automated tests
 	UseDockerComposeFromPath bool                    `yaml:"use_docker_compose_from_path,omitempty"`
 	UseHardenedImages        bool                    `yaml:"use_hardened_images"`
@@ -231,7 +232,16 @@ func ValidateGlobalConfig() error {
 		return fmt.Errorf(`xdebug_ide_location must be IP address or one of %v`, ValidXdebugIDELocations)
 	}
 
+	if err := validateGlobalHooks(DdevGlobalConfig.Hooks); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// validateGlobalHooks validates that hooks defined in global config use valid hook names and task types
+func validateGlobalHooks(hooks map[string][]nodeps.YAMLTask) error {
+	return nodeps.ValidateHooks(hooks, "global config")
 }
 
 // ReadGlobalConfig reads the global config file into DdevGlobalConfig
@@ -497,6 +507,17 @@ func WriteGlobalConfig(config GlobalConfig) error {
 
 # fail_on_hook_fail: false
 # Decide whether 'ddev start' should be interrupted by a failing hook
+
+# You can define global hooks that run for all projects:
+# hooks:
+#   post-start:
+#     - exec-host: "echo project started"
+#     - exec: "some-command"
+#   post-import-db:
+#     - exec: "drush cache:rebuild"
+# Global hooks run before project-specific hooks.
+# If a global hook references a service that doesn't exist in a project,
+# it will be skipped with a notice.
 
 # traefik_monitor_port: "10999"
 # Change this only if you're having conflicts with some
